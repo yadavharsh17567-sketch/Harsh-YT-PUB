@@ -61,3 +61,20 @@ export async function optimizeVideo(id: string): Promise<any> {
   });
   return res.json();
 }
+
+export async function runRule(id: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/rules/${id}/run`, {
+    method: 'POST'
+  });
+  return res.json();
+}
+
+export async function addManualVideo(videoData: any): Promise<any> {
+  const res = await fetch(`${API_BASE}/videos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(videoData)
+  });
+  return res.json();
+}
+

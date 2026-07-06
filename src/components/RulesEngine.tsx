@@ -1,11 +1,25 @@
 import { useState } from 'react';
 import { AppState } from '../db/db';
 import { Plus, Play, Trash2, Edit, Check, Settings2, RefreshCw } from 'lucide-react';
-import { createRule, updateRule, deleteRule } from '../api';
+import { createRule, updateRule, deleteRule, runRule } from '../api';
 
 export default function RulesEngine({ state, refresh }: { state: AppState, refresh: () => void }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<any>(null);
+  const [isRunningRule, setIsRunningRule] = useState<string | null>(null);
+  
+  const handleRun = async (id: string) => {
+    setIsRunningRule(id);
+    try {
+      await runRule(id);
+      refresh();
+    } catch (err) {
+      console.error('Failed to run rule:', err);
+    } finally {
+      setIsRunningRule(null);
+    }
+  };
+
   
   const [formData, setFormData] = useState({
     name: '',
@@ -128,13 +142,15 @@ export default function RulesEngine({ state, refresh }: { state: AppState, refre
               )}
             </div>
 
-            <div className="flex items-center justify-between pl-2 pt-4 border-t border-white/5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center justify-between pl-2 pt-4 border-t border-white/5 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
               <button 
-                onClick={() => {/* Trigger run logic here */}}
-                className="text-slate-400 hover:text-neon-blue flex items-center gap-1 text-xs font-medium transition-colors"
+                onClick={() => handleRun(rule.id)}
+                disabled={isRunningRule === rule.id}
+                className="text-slate-400 hover:text-neon-blue flex items-center gap-1 text-xs font-medium transition-colors disabled:opacity-50"
                 title="Run Now"
               >
-                <Play className="w-4 h-4" /> Run
+                <Play className={`w-4 h-4 ${isRunningRule === rule.id ? 'animate-pulse text-neon-blue' : ''}`} /> 
+                {isRunningRule === rule.id ? 'Running...' : 'Run'}
               </button>
               <div className="flex gap-2">
                 <button onClick={() => handleOpenModal(rule)} className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-white/10 transition-colors">

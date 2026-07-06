@@ -1,12 +1,15 @@
-import { useState } from 'react';
 import { AppState } from '../db/db';
 import { Activity, CheckCircle, Clock, Video, TrendingUp, Youtube, Plus, RefreshCw, ChevronDown } from 'lucide-react';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
 import { getAuthUrl } from '../api';
 
-export default function Dashboard({ state }: { state: AppState }) {
-  const [selectedUserId, setSelectedUserId] = useState<string>(state.users[0]?.id || '');
+interface DashboardProps {
+  state: AppState;
+  selectedUserId: string;
+  setSelectedUserId: (id: string) => void;
+}
 
+export default function Dashboard({ state, selectedUserId, setSelectedUserId }: DashboardProps) {
   const handleConnectYouTube = async () => {
     try {
       const { url } = await getAuthUrl();
@@ -16,26 +19,45 @@ export default function Dashboard({ state }: { state: AppState }) {
     }
   };
 
+  const completedCount = state.videos.filter(v => v.status === 'completed').length;
+  const activeRulesCount = state.scheduleRules.filter(r => r.enabled).length;
+  const pendingCount = state.videos.filter(v => ['queued', 'downloading', 'uploading'].includes(v.status)).length;
+
   const stats = [
-    { label: 'Videos Processed', value: state.processedVideoIds.length, icon: Video, color: 'text-neon-blue' },
-    { label: 'Active Rules', value: state.scheduleRules.filter(r => r.enabled).length, icon: Activity, color: 'text-neon-green' },
-    { label: 'Pending Queue', value: state.videos.filter(v => ['queued', 'downloading', 'uploading'].includes(v.status)).length, icon: Clock, color: 'text-neon-purple' },
-    { label: 'Success Uploads', value: state.videos.filter(v => v.status === 'completed').length, icon: CheckCircle, color: 'text-neon-green' },
+    { label: 'Videos Processed', value: completedCount, icon: Video, color: 'text-neon-blue' },
+    { label: 'Active Rules', value: activeRulesCount, icon: Activity, color: 'text-neon-green' },
+    { label: 'Pending Queue', value: pendingCount, icon: Clock, color: 'text-neon-purple' },
+    { label: 'Success Uploads', value: completedCount, icon: CheckCircle, color: 'text-neon-green' },
   ];
 
-  // Dummy chart data for UI purposes
+  // Simulated daily volume
   const chartData = [
-    { name: 'Mon', videos: 4 },
-    { name: 'Tue', videos: 7 },
-    { name: 'Wed', videos: 5 },
-    { name: 'Thu', videos: 12 },
-    { name: 'Fri', videos: 8 },
-    { name: 'Sat', videos: 15 },
-    { name: 'Sun', videos: 20 },
+    { name: 'Mon', videos: Math.max(1, Math.round(completedCount * 0.15)) },
+    { name: 'Tue', videos: Math.max(2, Math.round(completedCount * 0.25)) },
+    { name: 'Wed', videos: Math.max(1, Math.round(completedCount * 0.20)) },
+    { name: 'Thu', videos: Math.max(3, Math.round(completedCount * 0.40)) },
+    { name: 'Fri', videos: Math.max(2, Math.round(completedCount * 0.30)) },
+    { name: 'Sat', videos: Math.max(4, Math.round(completedCount * 0.50)) },
+    { name: 'Sun', videos: completedCount },
   ];
 
-  const connectedUser = state.users.find(u => u.id === selectedUserId) || state.users[0];
-  const activeVideos = state.videos.filter(v => ['queued', 'downloading', 'downloaded', 'uploading'].includes(v.status));
+  const connectedUser = selectedUserId === '' ? null : state.users.find(u => u.id === selectedUserId);
+  const activeVideos = state.videos.filter(v => 
+    ['queued', 'downloading', 'downloaded', 'uploading'].includes(v.status) &&
+    (selectedUserId === '' || v.targetUserId === selectedUserId)
+  );
+
+  const handleDeleteChannel = async () => {
+    if (!connectedUser) return;
+    if (confirm(`Are you sure you want to disconnect ${connectedUser.name}?`)) {
+      try {
+        await fetch('/api/users/' + connectedUser.id, { method: 'DELETE' });
+        window.location.reload();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -60,45 +82,102 @@ export default function Dashboard({ state }: { state: AppState }) {
           </div>
         </div>
       ) : (
-        <div className="glass-panel rounded-xl p-6 border border-white/10 flex flex-col md:flex-row items-center justify-between gap-6 relative">
-          <div className="flex items-center gap-4">
-            {connectedUser?.avatarUrl ? (
-              <img src={connectedUser.avatarUrl} alt={connectedUser.name} className="w-12 h-12 rounded-full border border-neon-blue/50" />
-            ) : (
-              <div className="w-12 h-12 rounded-full bg-neon-blue/20 border border-neon-blue/50 flex items-center justify-center text-neon-blue font-bold text-xl">
-                {connectedUser?.name.charAt(0)}
-              </div>
-            )}
-            <div>
-              <div className="flex items-center gap-3">
-                <h2 className="text-lg font-bold text-white">{connectedUser?.name}</h2>
-                <div className="relative group">
-                  <select 
-                    value={connectedUser?.id}
-                    onChange={(e) => setSelectedUserId(e.target.value)}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                  >
-                    {state.users.map(u => (
-                      <option key={u.id} value={u.id}>{u.name}</option>
-                    ))}
-                  </select>
-                  <button className="flex items-center gap-1 text-xs px-2 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-colors text-slate-300">
-                    <RefreshCw className="w-3 h-3" /> Switch
-                    <ChevronDown className="w-3 h-3 ml-1" />
-                  </button>
+        <div className="glass-panel rounded-xl p-6 border border-white/10 flex flex-col gap-6 relative">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-6 w-full">
+            <div className="flex items-center gap-4 self-start md:self-auto">
+              {connectedUser?.avatarUrl ? (
+                <img src={connectedUser.avatarUrl} alt={connectedUser.name} className="w-12 h-12 rounded-full border border-neon-blue/50" />
+              ) : selectedUserId === '' ? (
+                <div className="w-12 h-12 rounded-full bg-neon-blue/20 border border-neon-blue/50 flex items-center justify-center text-neon-blue font-bold">
+                  <Youtube className="w-6 h-6" />
                 </div>
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-neon-blue/20 border border-neon-blue/50 flex items-center justify-center text-neon-blue font-bold text-xl">
+                  {connectedUser?.name?.charAt(0)}
+                </div>
+              )}
+              <div>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-bold text-white">{selectedUserId === '' ? 'All Channels' : connectedUser?.name}</h2>
+                  <div className="relative group">
+                    <select 
+                      value={selectedUserId}
+                      onChange={(e) => setSelectedUserId(e.target.value)}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    >
+                      <option value="">All Channels</option>
+                      {state.users.map(u => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                    <button className="flex items-center gap-1 text-xs px-2 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-colors text-slate-300 pointer-events-none">
+                      <RefreshCw className="w-3 h-3" /> Switch
+                      <ChevronDown className="w-3 h-3 ml-1" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-slate-400 text-sm flex items-center gap-1 mt-1">
+                  <CheckCircle className="w-3 h-3 text-neon-green" /> {selectedUserId === '' ? 'Unified statistics view' : 'Connected via YouTube'}
+                </p>
               </div>
-              <p className="text-slate-400 text-sm flex items-center gap-1 mt-1">
-                <CheckCircle className="w-3 h-3 text-neon-green" /> Connected via YouTube
-              </p>
+            </div>
+            <div className="flex items-center gap-3 w-full md:w-auto justify-end">
+              {selectedUserId !== '' && (
+                <button 
+                  onClick={handleDeleteChannel}
+                  className="whitespace-nowrap px-4 py-2 bg-red-500/10 border border-red-500/20 text-red-400 font-medium rounded hover:bg-red-500/20 transition-colors flex items-center gap-2 text-sm cursor-pointer"
+                >
+                  Disconnect Channel
+                </button>
+              )}
+              <button 
+                onClick={handleConnectYouTube}
+                className="whitespace-nowrap px-4 py-2 border border-white/20 text-white font-medium rounded hover:bg-white/5 transition-colors flex items-center gap-2 text-sm cursor-pointer"
+              >
+                <Plus className="w-4 h-4" /> Add Channel
+              </button>
             </div>
           </div>
-          <button 
-            onClick={handleConnectYouTube}
-            className="whitespace-nowrap px-4 py-2 border border-white/20 text-white font-medium rounded hover:bg-white/5 transition-colors flex items-center gap-2 text-sm"
-          >
-            <Plus className="w-4 h-4" /> Add Channel
-          </button>
+
+          {selectedUserId === '' && state.users.length > 0 && (
+            <div className="border-t border-white/5 pt-6 w-full">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Connected YouTube Channels</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {state.users.map(u => (
+                  <div key={u.id} className="flex items-center justify-between p-3 bg-white/[0.02] border border-white/5 rounded-lg hover:bg-white/[0.04] hover:border-white/10 transition-all">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {u.avatarUrl ? (
+                        <img src={u.avatarUrl} alt={u.name} className="w-9 h-9 rounded-full border border-white/10" />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-neon-blue/20 border border-neon-blue/30 flex items-center justify-center text-neon-blue font-bold text-sm">
+                          {u.name.charAt(0)}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-white truncate">{u.name}</div>
+                        <div className="text-[10px] font-mono text-slate-500 truncate mt-0.5">UC{u.id.slice(0, 16)}...</div>
+                      </div>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        if (confirm(`Are you sure you want to disconnect ${u.name}?`)) {
+                          try {
+                            await fetch(`/api/users/${u.id}`, { method: 'DELETE' });
+                            window.location.reload();
+                          } catch (err) {
+                            console.error(err);
+                          }
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs font-bold rounded-md transition-colors flex-shrink-0"
+                    >
+                      Disconnect
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
