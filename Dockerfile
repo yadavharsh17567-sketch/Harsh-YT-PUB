@@ -13,18 +13,21 @@ WORKDIR /app
 
 # Copy package files and install dependencies
 COPY package*.json ./
+
+# Skip youtube-dl binary download during npm install
+ENV YOUTUBE_DL_SKIP_DOWNLOAD=true
+
 RUN npm install
 
 # Copy the rest of the application code
 COPY . .
 
-# Build the application (Vite + esbuild)
+# Build the application
 RUN npm run build
 
-# Expose the port Hugging Face expects (7860)
+# Expose the port Hugging Face expects
 EXPOSE 7860
 
-# Set environment variable for port
 ENV PORT=7860
 
 # Start the application
