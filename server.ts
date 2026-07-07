@@ -35,7 +35,7 @@ const PORT = process.env.PORT || 7860;
 
 
 // Apply auth middleware to all /api routes except login and status
-app.use('/', authMiddleware);
+app.use('/', (authMiddleware);
 
 // Auth Routes
 app.post('/login', (req, res) => {
