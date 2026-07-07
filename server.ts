@@ -32,31 +32,13 @@ const execFilePromise = util.promisify(execFile);
 const app = express();
 const PORT = process.env.PORT || 7860;
 
-app.use(cors());
-app.use(express.json());
 
-// Auth Middleware
-const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const token = req.headers['authorization'];
-  const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
-  
-  // Allow login and auth status check without token
-  if (req.path === '/api/login' || req.path === '/api/auth/status' || req.path === '/api/auth/callback') {
-    return next();
-  }
-
-  if (token === `Bearer ${expectedToken}`) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Unauthorized' });
-  }
-};
 
 // Apply auth middleware to all /api routes except login and status
-app.use('/api', authMiddleware);
+app.use('/', authMiddleware);
 
 // Auth Routes
-app.post('/api/login', (req, res) => {
+app.post('/login', (req, res) => {
   const { username, password } = req.body;
   if (username === process.env.APP_USERNAME && password === process.env.APP_PASSWORD) {
     const token = Buffer.from(`${username}:${password}`).toString('base64');
@@ -66,11 +48,11 @@ app.post('/api/login', (req, res) => {
   }
 });
 
-app.post('/api/logout', (req, res) => {
+app.post('//logout', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/auth/status', (req, res) => {
+app.get('/auth/status', (req, res) => {
   const token = req.headers['authorization'];
   const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
   
