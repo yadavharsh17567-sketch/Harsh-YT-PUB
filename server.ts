@@ -35,6 +35,39 @@ const PORT = process.env.PORT || 7860;
 app.use(cors());
 app.use(express.json());
 
+// ===== Simple App Authentication =====
+const APP_USERNAME = process.env.APP_USERNAME || "";
+const APP_PASSWORD = process.env.APP_PASSWORD || "";
+
+function requireAppAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const user = req.headers["x-app-username"];
+  const pass = req.headers["x-app-password"];
+
+  if (user === APP_USERNAME && pass === APP_PASSWORD) {
+    return next();
+  }
+  return res.status(401).json({ error: "Authentication required" });
+}
+
+app.post("/api/login", (req, res) => {
+  const { username, password } = req.body;
+  if (username === APP_USERNAME && password === APP_PASSWORD) {
+    return res.json({ success: true });
+  }
+  return res.status(401).json({ success: false, error: "Invalid credentials" });
+});
+
+app.get("/api/auth/status", (_req, res) => {
+  res.json({ configured: !!APP_USERNAME && !!APP_PASSWORD });
+});
+
+app.post("/api/logout", (_req, res) => {
+  res.json({ success: true });
+});
+// ===== End Authentication =====
+
+
+
 // YouTube OAuth Setup
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const REDIRECT_URI = `${APP_URL}/api/auth/callback`;
