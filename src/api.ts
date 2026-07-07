@@ -62,9 +62,11 @@ export async function optimizeVideo(id: string): Promise<any> {
   return res.json();
 }
 
-export async function runRule(id: string): Promise<any> {
+export async function runRule(id: string, sourceUrl?: string): Promise<any> {
   const res = await fetch(`${API_BASE}/rules/${id}/run`, {
-    method: 'POST'
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceUrl })
   });
   return res.json();
 }

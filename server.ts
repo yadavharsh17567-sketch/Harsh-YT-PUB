@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
+import OpenAI from 'openai';
 import { exec, execFile } from 'child_process';
 import util from 'util';
 import youtubedl from 'youtube-dl-exec';
@@ -190,7 +191,42 @@ app.delete('/api/rules/:id', (req, res) => {
   }
 });
 
-app.post('/api/rules/:id/run', (req, res) => {
+// Helper to fetch latest video URL from a channel
+async function fetchLatestVideoUrl(channelUrl: string, settings?: any) {
+  const ytDlpPath = path.resolve(process.cwd(), 'node_modules/youtube-dl-exec/bin/yt-dlp');
+  let cookiePath = null;
+  try {
+    const args = ['--get-id', '--playlist-items', '1', '--no-warnings', '--no-check-certificates', '--js-runtimes', 'node'];
+    if (settings) {
+      cookiePath = prepareCookies(settings, `fetch_${Date.now()}`);
+      if (cookiePath) args.push('--cookies', cookiePath);
+      if (settings.youtubePoToken || settings.youtubeVisitorData) {
+        const parts = [];
+        if (settings.youtubeVisitorData) parts.push(`visitor_data=${settings.youtubeVisitorData}`);
+        if (settings.youtubePoToken) parts.push(`po_token=web+${settings.youtubePoToken}`);
+        args.push('--extractor-args', `youtube:${parts.join(',')}`);
+      }
+    }
+    
+    // Ensure we are looking at the /videos tab for latest content
+    const targetUrl = channelUrl.includes('/videos') ? channelUrl : channelUrl.replace(/\/+$/, '') + '/videos';
+    
+    const { stdout } = await execFilePromise(ytDlpPath, [...args, targetUrl]);
+    const videoId = stdout.trim();
+    if (cookiePath && fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
+    
+    if (videoId) {
+      return `https://www.youtube.com/watch?v=${videoId}`;
+    }
+    return null;
+  } catch (err: any) {
+    if (cookiePath && fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
+    console.error("Failed to fetch latest video ID:", err.message);
+    return null;
+  }
+}
+
+app.post('/api/rules/:id/run', async (req, res) => {
   try {
     const db = getDb();
     const rule = db.scheduleRules.find(r => r.id === req.params.id);
@@ -198,19 +234,28 @@ app.post('/api/rules/:id/run', (req, res) => {
       return res.status(404).json({ error: 'Rule not found' });
     }
 
-    // Update last run timestamp
     rule.lastCheckedAt = new Date().toISOString();
+    let sourceUrl = req.body.sourceUrl;
 
-    const randomId = Math.random().toString(36).substring(2, 7);
-    const sourceUrl = `${rule.sourceChannelUrl}/watch?v=sched_${randomId}`;
+    if (!sourceUrl) {
+      addLog('info', `Rule "${rule.name}" is fetching latest video from ${rule.sourceChannelUrl}...`);
+      sourceUrl = await fetchLatestVideoUrl(rule.sourceChannelUrl, db.settings);
+    }
+
+    if (!sourceUrl) {
+      addLog('warn', `Rule "${rule.name}" failed to fetch a real video URL. Skipping.`);
+      return res.json({ success: false, message: 'Could not find a video on the source channel.' });
+    }
+
+    const videoId = sourceUrl.split('v=')[1] || Math.random().toString(36).substring(2, 7);
     const titlePrefix = rule.titlePrefix ? rule.titlePrefix + ' ' : '';
     const titleSuffix = rule.titleSuffix ? ' ' + rule.titleSuffix : '';
-    const title = `${titlePrefix}Auto Fetched Video ${randomId}${titleSuffix}`.trim();
+    const title = req.body.sourceUrl ? `Processing: ${videoId}` : `${titlePrefix}Auto Fetched Video ${videoId}${titleSuffix}`.trim();
     const description = `${rule.descriptionTemplate || 'Auto fetched description.'}\n\nProcessed by Nexus Scheduler Rule: ${rule.name}`;
 
     if (!isVideoAlreadyProcessed(sourceUrl, title)) {
       const newVideo = {
-        id: 'sched_' + Date.now() + '_' + randomId,
+        id: (req.body.sourceUrl ? 'real_' : 'auto_') + Date.now() + '_' + videoId,
         targetUserId: rule.targetUserId,
         sourceUrl: sourceUrl,
         title: title,
@@ -225,15 +270,16 @@ app.post('/api/rules/:id/run', (req, res) => {
         tags: rule.tags || [],
         scheduleRuleId: rule.id,
         isRewritten: false,
-        autoOptimizeSeo: rule.autoOptimizeSeo || false
+        autoOptimizeSeo: rule.autoOptimizeSeo || false,
+        needsMetadataFetch: true
       };
 
       db.videos.push(newVideo);
-      addLog('success', `Manual rule run: "${rule.name}" fetched recent video and moved it to queue.`, { videoTitle: title });
+      addLog('success', `Rule "${rule.name}" added real video to queue: ${sourceUrl}`, { videoTitle: title });
       saveDb(db);
       res.json({ success: true, video: newVideo });
     } else {
-      res.json({ success: true, message: 'Video already processed' });
+      res.json({ success: true, message: 'This video has already been processed.' });
     }
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -469,72 +515,37 @@ async function getOriginalVideoMetadata(url: string, settings?: any) {
   }
 }
 
-// Helper to dynamically generate a lightweight, 100% valid MP4 fallback video using FFmpeg on the fly
-async function generateFallbackVideo(outPath: string) {
-  try {
-    const cmd = `ffmpeg -f lavfi -i color=c=black:s=1280x720:d=2 -f lavfi -i anullsrc=cl=mono:r=44100 -c:v libx264 -tune stillimage -pix_fmt yuv420p -c:a aac -shortest -y "${outPath}"`;
-    await execPromise(cmd);
-    console.log(`Generated high-fidelity 2-second fallback video at: ${outPath}`);
-    return true;
-  } catch (err: any) {
-    console.error("FFmpeg fallback generation failed:", err.message);
-    // Absolute fallback: write Legacy dummy buffer
-    fs.writeFileSync(outPath, Buffer.alloc(100 * 1024));
-    return false;
-  }
-}
-
-// Background processor mock integration
-// In a real app we would use youtube-dl and googleapis to download/upload
-// For this applet, since downloading real YT videos in this container might have rate limits or binary issues,
-// We will simulate the downloading and uploading process for demonstration.
+// Background processor
 async function processVideo(video: any) {
   let db = getDb();
   
-  // 0. Fetch original video metadata from YouTube if needed
+  // 0. Fetch original video metadata from YouTube
   if (video.needsMetadataFetch) {
-    const isMockUrl = video.sourceUrl.includes('sched_') || video.sourceUrl.includes('mock') || !video.sourceUrl.startsWith('http');
-    if (!isMockUrl) {
-      addLog('info', `Fetching original video details via yt-dlp for URL: ${video.sourceUrl}`);
-      try {
-        const metadata = await getOriginalVideoMetadata(video.sourceUrl, db.settings);
-        video.title = metadata.title || video.title;
-        video.description = metadata.description || video.description;
-        if (metadata.tags && metadata.tags.length > 0) {
-          video.tags = Array.from(new Set([...(video.tags || []), ...metadata.tags]));
-        }
-        video.needsMetadataFetch = false;
-
-        // Sync to DB
-        let freshDb = getDb();
-        let freshVideo = freshDb.videos.find(v => v.id === video.id);
-        if (freshVideo) {
-          freshVideo.title = video.title;
-          freshVideo.description = video.description;
-          freshVideo.tags = video.tags;
-          freshVideo.needsMetadataFetch = false;
-          saveDb(freshDb);
-        }
-        addLog('success', `Successfully fetched original metadata title: "${video.title}"`);
-      } catch (metaErr: any) {
-        const idMatch = video.sourceUrl.match(/(?:v=|\/shorts\/|\/embed\/|\/v\/|youtu\.be\/|\/watch\?v=)([^#\&\?]+)/);
-        const videoId = idMatch ? idMatch[1] : 'Shorts_Video';
-        video.title = `YouTube Video ${videoId}`;
-        video.description = 'Automatically imported via local pipeline.';
-        addLog('warn', `Failed to fetch original metadata for ${video.sourceUrl}. Using fallback title: "${video.title}". Error: ${metaErr.message}`);
+    addLog('info', `Fetching original video details for: ${video.sourceUrl}`);
+    try {
+      const metadata = await getOriginalVideoMetadata(video.sourceUrl, db.settings);
+      video.title = metadata.title || video.title;
+      video.description = metadata.description || video.description;
+      if (metadata.tags && metadata.tags.length > 0) {
+        video.tags = Array.from(new Set([...(video.tags || []), ...metadata.tags]));
       }
-    } else {
-      // Is mock, generate a placeholder
-      const randId = Math.random().toString(36).substring(2, 7);
-      video.title = `Simulated Video ${randId}`;
       video.needsMetadataFetch = false;
+
+      // Sync to DB
       let freshDb = getDb();
       let freshVideo = freshDb.videos.find(v => v.id === video.id);
       if (freshVideo) {
         freshVideo.title = video.title;
+        freshVideo.description = video.description;
+        freshVideo.tags = video.tags;
         freshVideo.needsMetadataFetch = false;
         saveDb(freshDb);
       }
+      addLog('success', `Fetched real metadata: "${video.title}"`);
+    } catch (metaErr: any) {
+      addLog('error', `Failed to fetch metadata for ${video.sourceUrl}: ${metaErr.message}`);
+      // If we can't get metadata, we can't really process it well, but we'll try to continue if it's not a simulation
+      video.needsMetadataFetch = false;
     }
   }
 
@@ -545,23 +556,15 @@ async function processVideo(video: any) {
   if (video.autoOptimizeSeo && !video.isRewritten) {
     addLog('info', `Auto-optimizing SEO using AI for "${video.title}" before download and upload.`);
     try {
-      let apiKey = db.settings.geminiApiKey;
-      if (!apiKey || !apiKey.startsWith('AIzaSy')) {
-        if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.startsWith('AIzaSy')) {
-          apiKey = process.env.GEMINI_API_KEY;
-        }
+      const geminiApiKey = (db.settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+      const openaiApiKey = (db.settings.openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
+
+      if (!geminiApiKey && !openaiApiKey) {
+        addLog('warn', `Auto-optimization skipped: No API keys configured in settings.`);
+        return;
       }
 
-      if (apiKey) {
-        const ai = new GoogleGenAI({ 
-          apiKey,
-          httpOptions: {
-            headers: {
-              'User-Agent': 'aistudio-build',
-            }
-          }
-        });
-        const prompt = `Act as an expert YouTube SEO optimizer and viral growth strategist.
+      const prompt = `Act as an expert YouTube SEO optimizer and viral growth strategist.
 Given the following original video title and description:
 Title: "${video.title}"
 Description: "${video.description}"
@@ -582,17 +585,58 @@ Respond ONLY in JSON format:
 }
 If the provided title is generic (like "YouTube Video ID"), use your best judgment based on any keywords in the description or common high-performing Short patterns.`;
 
-        const response = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
-          contents: prompt,
-          config: {
-            responseMimeType: 'application/json'
-          }
-        });
-        
-        const resultText = response.text || "{}";
-        const result = JSON.parse(resultText);
-        
+      let result: any = null;
+      let lastError = "";
+
+      // Try Gemini first
+      if (geminiApiKey) {
+        if (!geminiApiKey.startsWith('AIzaSy')) {
+          addLog('warn', `Gemini API key found but does not start with expected prefix "AIzaSy". Found: ${geminiApiKey.substring(0, 4)}...`);
+        }
+        try {
+          const ai = new GoogleGenAI({ 
+            apiKey: geminiApiKey,
+            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+          });
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.5-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' }
+          });
+          const resultText = response.text || "{}";
+          result = JSON.parse(resultText);
+          addLog('info', 'SEO optimization completed successfully using Gemini.');
+        } catch (geminiErr: any) {
+          lastError = `Gemini Error: ${geminiErr.message}`;
+          addLog('warn', `Gemini optimization failed: ${geminiErr.message}`);
+        }
+      }
+
+      // Try OpenAI fallback or primary
+      if (!result && openaiApiKey) {
+        if (!openaiApiKey.startsWith('sk-')) {
+          addLog('warn', `OpenAI API key found but does not start with expected prefix "sk-". Found: ${openaiApiKey.substring(0, 3)}...`);
+        }
+        try {
+          const openai = new OpenAI({ apiKey: openaiApiKey });
+          const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are a YouTube SEO expert." },
+              { role: "user", content: prompt }
+            ],
+            response_format: { type: "json_object" }
+          });
+          const resultText = completion.choices[0].message.content || "{}";
+          result = JSON.parse(resultText);
+          addLog('info', 'SEO optimization completed successfully using OpenAI GPT.');
+        } catch (openaiErr: any) {
+          lastError = lastError ? `${lastError} | OpenAI Error: ${openaiErr.message}` : `OpenAI Error: ${openaiErr.message}`;
+          addLog('error', `OpenAI optimization failed: ${openaiErr.message}`);
+        }
+      }
+
+      if (result) {
         let freshDb = getDb();
         let freshVideo = freshDb.videos.find(v => v.id === video.id);
         if (freshVideo) {
@@ -618,7 +662,7 @@ If the provided title is generic (like "YouTube Video ID"), use your best judgme
           addLog('success', `AI SEO optimized title: "${video.title}"`, { score: freshVideo.cpsPrediction.score });
         }
       } else {
-        addLog('warn', `Auto-optimization skipped: No Gemini API Key configured.`);
+        addLog('warn', `Auto-optimization skipped: ${lastError || "No valid API keys found in settings or environment."}`);
       }
     } catch (seoErr: any) {
       addLog('error', `Auto SEO optimization failed for "${video.title}": ${seoErr.message}`);
@@ -633,62 +677,17 @@ If the provided title is generic (like "YouTube Video ID"), use your best judgme
   }
 
   const isMockToken = !targetUser.accessToken || targetUser.accessToken.startsWith('mock_');
-  const isMockUrl = video.sourceUrl.includes('sched_') || video.sourceUrl.includes('mock') || !video.sourceUrl.startsWith('http');
-  const useSimulation = isMockToken || isMockUrl;
+  
+  if (isMockToken) {
+    addLog('warn', `Simulated Channel detected for "${targetUser.name}". Real upload is disabled for mock accounts.`);
+    // We'll mark it as failed or complete simulation if you want, but user wants real.
+    throw new Error('Real upload requires a connected YouTube account (not a mock account).');
+  }
 
   const cookiePath = path.resolve(process.cwd(), `cookies_${video.id}.txt`);
   const outPath = path.resolve(process.cwd(), `tmp_${video.id}.mp4`);
 
   try {
-    if (useSimulation) {
-      addLog('info', `[Simulation Mode] Starting mock processing for simulated pipeline: "${video.title}"`);
-      
-      // Update status to 'downloading'
-      let freshDb = getDb();
-      let freshVideo = freshDb.videos.find(v => v.id === video.id);
-      if (freshVideo) {
-        freshVideo.status = 'downloading';
-        freshVideo.progress = 25;
-        saveDb(freshDb);
-      }
-      await new Promise(r => setTimeout(r, 2000));
-
-      // Update status to 'downloaded' (Processing)
-      freshDb = getDb();
-      freshVideo = freshDb.videos.find(v => v.id === video.id);
-      if (freshVideo) {
-        freshVideo.status = 'downloaded';
-        freshVideo.progress = 50;
-        saveDb(freshDb);
-      }
-      await new Promise(r => setTimeout(r, 1000));
-
-      // Update status to 'uploading'
-      freshDb = getDb();
-      freshVideo = freshDb.videos.find(v => v.id === video.id);
-      if (freshVideo) {
-        freshVideo.status = 'uploading';
-        freshVideo.progress = 75;
-        saveDb(freshDb);
-      }
-      await new Promise(r => setTimeout(r, 2000));
-
-      // Mark as completed
-      freshDb = getDb();
-      freshVideo = freshDb.videos.find(v => v.id === video.id);
-      if (freshVideo) {
-        freshVideo.status = 'completed';
-        freshVideo.progress = 100;
-        freshVideo.completedAt = new Date().toISOString();
-        if (!freshDb.processedVideoIds.includes(video.id)) {
-          freshDb.processedVideoIds.push(video.id);
-        }
-        saveDb(freshDb);
-      }
-      addLog('success', `[Simulation Mode] Successfully processed and uploaded "${video.title}" to channel: ${targetUser.name}`);
-      return;
-    }
-
     // --- REAL PIPELINE PATHWAY ---
     addLog('info', `Starting real download for video: "${video.title}" using local yt-dlp`);
 
@@ -736,7 +735,7 @@ If the provided title is generic (like "YouTube Video ID"), use your best judgme
       const ytDlpPath = path.resolve(process.cwd(), 'node_modules/youtube-dl-exec/bin/yt-dlp');
       const dlPromise = execFilePromise(ytDlpPath, dlArgsArr);
       const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Download timeout (60s exceeded)')), 60000)
+        setTimeout(() => reject(new Error('Download timeout (300s exceeded)')), 300000)
       );
       await Promise.race([dlPromise, timeoutPromise]);
 
@@ -747,11 +746,8 @@ If the provided title is generic (like "YouTube Video ID"), use your best judgme
     } catch (ytErr: any) {
       downloadSucceeded = false;
       const errorMsg = ytErr.message || String(ytErr);
-      addLog('warn', `Real download blocked by YouTube bot protection or expired cookies: ${errorMsg.slice(0, 180)}...`);
-      addLog('info', `[Fallback Mode] Dynamically compiling a valid, lightweight H.264 video fallback using FFmpeg to keep your automated pipeline 100% active and bypass processing errors!`);
-      
-      // Generate a valid, decodable, lightweight 2-second black video with silent audio track via FFmpeg
-      await generateFallbackVideo(outPath);
+      addLog('error', `Download failed: ${errorMsg}`);
+      throw new Error(`Could not download video. YouTube might be blocking the request or the URL is invalid. Error: ${errorMsg}`);
     }
 
     // Update status to 'downloaded' (Processing)
@@ -872,6 +868,18 @@ If the provided title is generic (like "YouTube Video ID"), use your best judgme
         media: {
           body: fs.createReadStream(outPath),
         },
+      }, {
+        timeout: 600000, // 10 minutes timeout for upload
+        retry: true,
+        retryConfig: {
+          retry: 3,
+          retryDelay: 1000,
+          statusCodesToRetry: [[100, 199], [429, 429], [500, 599]],
+          httpMethodsToRetry: ['POST'],
+          onRetryAttempt: (err) => {
+            addLog('warn', `Upload retry attempt due to error: ${err.message}`);
+          }
+        }
       });
     } catch (uploadErr: any) {
       const isAuthError = uploadErr.code === 401 || 
@@ -929,6 +937,9 @@ If the provided title is generic (like "YouTube Video ID"), use your best judgme
               media: {
                 body: fs.createReadStream(outPath),
               },
+            }, {
+              timeout: 600000, // 10 minutes
+              retry: true
             });
           } else {
             throw uploadErr;
@@ -1007,35 +1018,48 @@ setInterval(async () => {
         rule.lastCheckedAt = now.toISOString();
         changed = true;
 
-        const randomId = Math.random().toString(36).substring(2, 7);
-        const sourceUrl = `${rule.sourceChannelUrl}/watch?v=sched_${randomId}`;
-        const titlePrefix = rule.titlePrefix ? rule.titlePrefix + ' ' : '';
-        const titleSuffix = rule.titleSuffix ? ' ' + rule.titleSuffix : '';
-        const title = `${titlePrefix}Auto Fetched Video ${randomId}${titleSuffix}`.trim();
-        const description = `${rule.descriptionTemplate || 'Auto fetched description.'}\n\nProcessed by Nexus Scheduler Rule: ${rule.name}`;
+        addLog('info', `Interval reached for rule "${rule.name}". Checking for new videos...`);
+        
+        try {
+          const sourceUrl = await fetchLatestVideoUrl(rule.sourceChannelUrl, db.settings);
+          if (sourceUrl) {
+            const videoId = sourceUrl.split('v=')[1] || Math.random().toString(36).substring(2, 7);
+            const titlePrefix = rule.titlePrefix ? rule.titlePrefix + ' ' : '';
+            const titleSuffix = rule.titleSuffix ? ' ' + rule.titleSuffix : '';
+            const title = `${titlePrefix}Auto Fetched Video ${videoId}${titleSuffix}`.trim();
+            const description = `${rule.descriptionTemplate || 'Auto fetched description.'}\n\nProcessed by Nexus Scheduler Rule: ${rule.name}`;
 
-        if (!isVideoAlreadyProcessed(sourceUrl, title)) {
-          const newVideo = {
-            id: 'sched_' + Date.now() + '_' + randomId,
-            targetUserId: rule.targetUserId,
-            sourceUrl: sourceUrl,
-            title: title,
-            description: description,
-            thumbnailUrl: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=300',
-            status: 'queued' as const,
-            progress: 0,
-            retryCount: 0,
-            maxRetries: db.settings.maxRetries || 3,
-            queuedAt: new Date().toISOString(),
-            privacyStatus: rule.privacyStatus || 'private',
-            tags: rule.tags || [],
-            scheduleRuleId: rule.id,
-            isRewritten: false,
-            autoOptimizeSeo: rule.autoOptimizeSeo || false
-          };
+            if (!isVideoAlreadyProcessed(sourceUrl, title)) {
+              const newVideo = {
+                id: 'auto_' + Date.now() + '_' + videoId,
+                targetUserId: rule.targetUserId,
+                sourceUrl: sourceUrl,
+                title: title,
+                description: description,
+                thumbnailUrl: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=300',
+                status: 'queued' as const,
+                progress: 0,
+                retryCount: 0,
+                maxRetries: db.settings.maxRetries || 3,
+                queuedAt: new Date().toISOString(),
+                privacyStatus: rule.privacyStatus || 'private',
+                tags: rule.tags || [],
+                scheduleRuleId: rule.id,
+                isRewritten: false,
+                autoOptimizeSeo: rule.autoOptimizeSeo || false,
+                needsMetadataFetch: true
+              };
 
-          db.videos.push(newVideo);
-          addLog('success', `Scheduler rule "${rule.name}" auto-fetched latest video and added it to queue.`, { videoTitle: title });
+              db.videos.push(newVideo);
+              addLog('success', `Scheduler rule "${rule.name}" found a NEW video: ${sourceUrl}`, { videoTitle: title });
+            } else {
+              addLog('info', `No new videos found for rule "${rule.name}" since last check.`);
+            }
+          } else {
+            addLog('warn', `Scheduler rule "${rule.name}" could not find any videos at ${rule.sourceChannelUrl}`);
+          }
+        } catch (fetchErr: any) {
+          addLog('error', `Rule "${rule.name}" auto-fetch failed: ${fetchErr.message}`);
         }
       }
     }

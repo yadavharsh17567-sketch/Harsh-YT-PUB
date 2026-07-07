@@ -54,6 +54,7 @@ export interface AppState {
     googleClientId: string;
     googleClientSecret: string;
     geminiApiKey: string;
+    openaiApiKey?: string;
     maxConcurrentUploads: number;
     maxRetries: number;
     videoQuality: string;
@@ -74,6 +75,7 @@ const defaultState: AppState = {
     googleClientId: process.env.GOOGLE_CLIENT_ID || '',
     googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     geminiApiKey: process.env.GEMINI_API_KEY || '',
+    openaiApiKey: process.env.OPENAI_API_KEY || '',
     maxConcurrentUploads: 1,
     maxRetries: 3,
     videoQuality: '1080p',

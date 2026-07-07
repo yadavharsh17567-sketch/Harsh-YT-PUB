@@ -8,15 +8,24 @@ export default function RulesEngine({ state, refresh }: { state: AppState, refre
   const [editingRule, setEditingRule] = useState<any>(null);
   const [isRunningRule, setIsRunningRule] = useState<string | null>(null);
   
-  const handleRun = async (id: string) => {
+  const handleRun = async (id: string, manualUrl?: string) => {
     setIsRunningRule(id);
     try {
-      await runRule(id);
+      await runRule(id, manualUrl);
       refresh();
     } catch (err) {
       console.error('Failed to run rule:', err);
     } finally {
       setIsRunningRule(null);
+    }
+  };
+
+  const promptRunManual = (id: string) => {
+    const url = prompt('Enter a real YouTube video URL to test this rule (e.g. https://www.youtube.com/watch?v=...):');
+    if (url && url.startsWith('http')) {
+      handleRun(id, url);
+    } else if (url) {
+      alert('Please enter a valid YouTube URL');
     }
   };
 
@@ -143,15 +152,26 @@ export default function RulesEngine({ state, refresh }: { state: AppState, refre
             </div>
 
             <div className="flex items-center justify-between pl-2 pt-4 border-t border-white/5 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-              <button 
-                onClick={() => handleRun(rule.id)}
-                disabled={isRunningRule === rule.id}
-                className="text-slate-400 hover:text-neon-blue flex items-center gap-1 text-xs font-medium transition-colors disabled:opacity-50"
-                title="Run Now"
-              >
-                <Play className={`w-4 h-4 ${isRunningRule === rule.id ? 'animate-pulse text-neon-blue' : ''}`} /> 
-                {isRunningRule === rule.id ? 'Running...' : 'Run'}
-              </button>
+              <div className="flex gap-4">
+                <button 
+                  onClick={() => handleRun(rule.id)}
+                  disabled={isRunningRule === rule.id}
+                  className="text-slate-400 hover:text-neon-blue flex items-center gap-1 text-xs font-medium transition-colors disabled:opacity-50"
+                  title="Run Now"
+                >
+                  <Play className={`w-4 h-4 ${isRunningRule === rule.id ? 'animate-pulse text-neon-blue' : ''}`} /> 
+                  {isRunningRule === rule.id ? 'Running...' : 'Run'}
+                </button>
+                <button 
+                  onClick={() => promptRunManual(rule.id)}
+                  disabled={isRunningRule === rule.id}
+                  className="text-slate-400 hover:text-neon-purple flex items-center gap-1 text-xs font-medium transition-colors disabled:opacity-50"
+                  title="Test with Real URL"
+                >
+                  <RefreshCw className="w-4 h-4" /> 
+                  Test
+                </button>
+              </div>
               <div className="flex gap-2">
                 <button onClick={() => handleOpenModal(rule)} className="p-1.5 text-slate-400 hover:text-white rounded hover:bg-white/10 transition-colors">
                   <Edit className="w-4 h-4" />
