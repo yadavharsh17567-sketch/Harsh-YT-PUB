@@ -32,8 +32,8 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
   return (
     <div className="min-h-screen w-full bg-slate-900 flex items-center justify-center relative overflow-hidden font-sans">
       {/* Dynamic Background Elements */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-neon-purple/10 rounded-full blur-[120px] animate-pulse" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-neon-blue/10 rounded-full blur-[120px] animate-pulse delay-700" />
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-500/10 rounded-full blur-[120px] animate-pulse" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-500/10 rounded-full blur-[120px] animate-pulse delay-700" />
       
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
@@ -41,18 +41,18 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
         transition={{ duration: 0.8, ease: "easeOut" }}
         className="w-full max-w-md px-6 relative z-10"
       >
-        <div className="glass-panel p-8 lg:p-10 rounded-3xl border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] relative overflow-hidden group">
+        <div className="bg-slate-900/40 backdrop-blur-xl p-8 lg:p-10 rounded-3xl border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] relative overflow-hidden group">
           {/* Animated Accent Line */}
-          <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-neon-blue to-transparent opacity-50 group-hover:opacity-100 transition-opacity duration-500" />
+          <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-cyan-400 to-transparent opacity-50 group-hover:opacity-100 transition-opacity duration-500" />
           
           <div className="flex flex-col items-center mb-10">
             <motion.div 
               whileHover={{ rotate: 10, scale: 1.1 }}
-              className="w-16 h-16 rounded-2xl bg-black border border-neon-blue flex items-center justify-center shadow-[0_0_20px_rgba(0,240,255,0.4)] mb-6"
+              className="w-16 h-16 rounded-2xl bg-black border border-cyan-400 flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.4)] mb-6"
             >
-              <Rocket className="w-8 h-8 text-neon-blue" />
+              <Rocket className="w-8 h-8 text-cyan-400" />
             </motion.div>
-            <h1 className="text-3xl font-bold tracking-[0.2em] uppercase neon-text-blue mb-2 text-center">
+            <h1 className="text-3xl font-bold tracking-[0.2em] uppercase text-cyan-400 mb-2 text-center drop-shadow-[0_0_10px_rgba(34,211,238,0.5)]">
               NEXUS
             </h1>
             <p className="text-slate-500 text-xs font-mono tracking-widest uppercase">
@@ -71,7 +71,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Enter Username"
-                  className="w-full bg-slate-950/50 border border-white/10 focus:border-neon-blue/50 focus:ring-1 focus:ring-neon-blue/20 rounded-xl px-4 py-3 text-slate-200 outline-none transition-all placeholder:text-slate-700"
+                  className="w-full bg-slate-950/50 border border-white/10 focus:border-cyan-400/50 focus:ring-1 focus:ring-cyan-400/20 rounded-xl px-4 py-3 text-slate-200 outline-none transition-all placeholder:text-slate-700"
                   required
                 />
               </div>
@@ -87,7 +87,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Enter Password"
-                  className="w-full bg-slate-950/50 border border-white/10 focus:border-neon-purple/50 focus:ring-1 focus:ring-neon-purple/20 rounded-xl px-4 py-3 text-slate-200 outline-none transition-all placeholder:text-slate-700"
+                  className="w-full bg-slate-950/50 border border-white/10 focus:border-purple-400/50 focus:ring-1 focus:ring-purple-400/20 rounded-xl px-4 py-3 text-slate-200 outline-none transition-all placeholder:text-slate-700"
                   required
                 />
               </div>
@@ -109,8 +109,8 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
               disabled={isLoading}
               className="w-full relative group overflow-hidden rounded-xl h-12 flex items-center justify-center gap-3 transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
             >
-              <div className="absolute inset-0 bg-gradient-to-r from-neon-blue via-neon-purple to-neon-blue bg-[length:200%_100%] animate-gradient-shift opacity-90 group-hover:opacity-100 transition-opacity" />
-              <div className="relative z-10 flex items-center gap-2 text-slate-900 font-bold uppercase tracking-widest text-sm">
+              <div className="absolute inset-0 bg-gradient-to-r from-cyan-500 via-purple-500 to-cyan-500 bg-[length:200%_100%] animate-pulse opacity-90 group-hover:opacity-100 transition-opacity" />
+              <div className="relative z-10 flex items-center gap-2 text-white font-bold uppercase tracking-widest text-sm">
                 {isLoading ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
@@ -123,7 +123,7 @@ export default function LoginPage({ onLoginSuccess }: LoginPageProps) {
 
           <div className="mt-10 flex justify-between items-center text-[10px] text-slate-600 font-mono">
             <span className="flex items-center gap-1">
-              <div className="w-1 h-1 rounded-full bg-neon-green" /> SECURITY ACTIVE
+              <div className="w-1 h-1 rounded-full bg-green-500" /> SECURITY ACTIVE
             </span>
             <span>V 2.0.4 - ENCRYPTED</span>
           </div>
