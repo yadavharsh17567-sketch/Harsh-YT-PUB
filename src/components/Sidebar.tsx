@@ -1,5 +1,5 @@
-import { LayoutDashboard, Activity, CloudUpload, Settings, Youtube, Plus, Rocket } from 'lucide-react';
-import { getAuthUrl, exchangeAuthCode } from '../api';
+import { LayoutDashboard, Activity, CloudUpload, Settings, Youtube, Plus, Rocket, LogOut } from 'lucide-react';
+import { getAuthUrl, exchangeAuthCode, logout } from '../api';
 import { AppState } from '../db/db';
 
 interface SidebarProps {
@@ -9,6 +9,13 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ activeTab, setActiveTab, users }: SidebarProps) {
+  const handleLogout = async () => {
+    if (confirm('Are you sure you want to log out of the system?')) {
+      await logout();
+      window.location.reload();
+    }
+  };
+
   const handleConnectYouTube = async () => {
     try {
       const { url } = await getAuthUrl();
@@ -80,6 +87,15 @@ export default function Sidebar({ activeTab, setActiveTab, users }: SidebarProps
             className="flex items-center justify-center gap-2 px-2 py-2 mt-2 rounded border border-dashed border-slate-600 text-slate-400 hover:text-neon-blue hover:border-neon-blue hover:bg-neon-blue/5 transition-colors text-sm"
           >
             <Plus className="w-4 h-4" /> Add Channel
+          </button>
+        </div>
+        <div className="mt-6 pt-6 border-t border-white/5">
+          <button 
+            onClick={handleLogout}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300 border border-transparent text-slate-400 hover:text-red-400 hover:bg-red-400/5 hover:border-red-400/20"
+          >
+            <LogOut className="w-5 h-5" />
+            <span className="font-medium text-sm tracking-wider uppercase">Sign Out</span>
           </button>
         </div>
       </div>
