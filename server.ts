@@ -529,7 +529,7 @@ Your goal is to generate a highly engaging, click-worthy, and SEO-optimized simi
 1. The newTitle should be a highly engaging, punchy, similar title of the video that is optimized for maximum YouTube search and viral click-through rates (CTR).
 2. The newDescription should be a comprehensive, keyword-dense description optimized for search algorithms, featuring relevant hashtags, compelling copy, and calls-to-action.
 3. Suggest 5-10 highly relevant high-traffic tags.
-4. Predict the click-through rate (CTR, out of 100) and provide a performance score.
+4. Predict the click-through rate (CTR, out of 100) and provide a performance score (0-100).
 
 Respond ONLY in JSON format:
 {
@@ -541,7 +541,7 @@ Respond ONLY in JSON format:
 }`;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3.5-flash',
+          model: 'gemini-2.0-flash',
           contents: prompt,
           config: {
             responseMimeType: 'application/json'
