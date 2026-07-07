@@ -21,6 +21,7 @@ export interface AppState {
     scheduleRuleId?: string;
     isRewritten: boolean;
     autoOptimizeSeo: boolean;
+    needsMetadataFetch?: boolean;
     seoThumbnailUrl?: string;
     cpsPrediction?: { score: number; ctr: number; tagsSuggestions: string[] };
     error?: string;

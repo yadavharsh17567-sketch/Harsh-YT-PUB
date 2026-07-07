@@ -1,8 +1,116 @@
 import * as React from 'react';
 import { AppState } from '../db/db';
 import { Sparkles, Trash2, RefreshCw, AlertCircle, Check, Loader2, Plus, Video } from 'lucide-react';
-import { optimizeVideo, addManualVideo } from '../api';
+import { optimizeVideo, addManualVideo, retryVideo, deleteVideo } from '../api';
 import { useState } from 'react';
+
+function VideoPipelineProgress({ video }: { video: any }) {
+  const isFailed = video.status === 'failed';
+  const isCompleted = video.status === 'completed';
+  
+  // Step 1: Queued/Added
+  const step1 = { status: 'completed', label: 'Queued' };
+  
+  // Step 2: Download
+  let step2Status = 'pending';
+  if (video.status === 'downloading') step2Status = 'active';
+  else if (['downloaded', 'uploading', 'completed'].includes(video.status)) step2Status = 'completed';
+  const step2 = { status: step2Status, label: 'Download' };
+  
+  // Step 3: SEO Opt
+  let step3Status = 'pending';
+  if (video.isRewritten) step3Status = 'completed';
+  else if (video.status === 'downloading' && video.autoOptimizeSeo) step3Status = 'active';
+  const step3 = { status: step3Status, label: 'AI SEO' };
+  
+  // Step 4: Upload
+  let step4Status = 'pending';
+  if (video.status === 'uploading') step4Status = 'active';
+  else if (video.status === 'completed') step4Status = 'completed';
+  const step4 = { status: step4Status, label: 'Upload' };
+
+  const steps = [step1, step2, step3, step4];
+  
+  return (
+    <div className="flex flex-col gap-1.5 py-1 min-w-[260px]">
+      {/* Steps line */}
+      <div className="flex items-center justify-between relative px-2">
+        <div className="absolute top-[10px] left-[15px] right-[15px] h-[2px] bg-slate-800 z-0" />
+        <div 
+          className="absolute top-[10px] left-[15px] h-[2px] bg-gradient-to-r from-neon-blue via-neon-purple to-neon-green transition-all duration-500 z-0" 
+          style={{
+            width: isFailed ? '0%' :
+                   isCompleted ? 'calc(100% - 30px)' :
+                   video.status === 'uploading' ? '75%' :
+                   video.status === 'downloaded' ? '50%' :
+                   video.status === 'downloading' ? '25%' : '0%'
+          }}
+        />
+
+        {steps.map((s, idx) => {
+          let dotStyle = 'border-slate-700 bg-slate-900 text-slate-500';
+          let pulseClass = '';
+          
+          if (isFailed && idx === steps.findIndex(x => x.status === 'active' || x.status === 'pending')) {
+            dotStyle = 'border-neon-red/50 bg-neon-red/10 text-neon-red shadow-[0_0_8px_rgba(255,0,85,0.4)]';
+          } else if (s.status === 'completed') {
+            dotStyle = 'border-neon-green/50 bg-neon-green/10 text-neon-green';
+          } else if (s.status === 'active') {
+            dotStyle = 'border-neon-blue bg-neon-blue/20 text-neon-blue shadow-[0_0_10px_rgba(0,240,255,0.3)]';
+            pulseClass = 'animate-pulse';
+          }
+          
+          return (
+            <div key={idx} className="relative z-10 flex flex-col items-center">
+              <div className={`w-[20px] h-[20px] rounded-full border flex items-center justify-center text-[9px] font-bold transition-all duration-300 ${dotStyle} ${pulseClass}`}>
+                {s.status === 'completed' ? '✓' : idx + 1}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      
+      {/* Step Labels */}
+      <div className="flex justify-between text-[9px] font-semibold text-slate-500">
+        {steps.map((s, idx) => {
+          let textColor = 'text-slate-500';
+          if (isFailed && idx === steps.findIndex(x => x.status === 'active' || x.status === 'pending')) {
+            textColor = 'text-neon-red font-bold';
+          } else if (s.status === 'completed') {
+            textColor = 'text-slate-400';
+          } else if (s.status === 'active') {
+            textColor = 'text-neon-blue font-bold';
+          }
+          return (
+            <div key={idx} className={`w-12 text-center truncate ${textColor}`} title={s.label}>
+              {s.label}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Message and numerical progress */}
+      <div className="flex justify-between items-center text-[11px] mt-0.5">
+        <span className="text-slate-400 font-medium">
+          {isFailed ? (
+            <span className="text-neon-red flex items-center gap-1 font-semibold">
+              ⚠️ Failed (Try {video.retryCount}/{video.maxRetries})
+            </span>
+          ) : isCompleted ? (
+            <span className="text-neon-green font-semibold">✓ Completed</span>
+          ) : (
+            <span className="capitalize text-slate-300 font-medium">
+              {video.status === 'downloaded' ? 'Processing' : video.status}...
+            </span>
+          )}
+        </span>
+        {['downloading', 'downloaded', 'uploading'].includes(video.status) && (
+          <span className="font-mono text-neon-blue font-bold text-xs">{video.progress}%</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function QueueTracker({ state, refresh }: { state: AppState, refresh: () => void }) {
   const [optimizing, setOptimizing] = useState<string | null>(null);
@@ -19,7 +127,7 @@ export default function QueueTracker({ state, refresh }: { state: AppState, refr
     tags: '',
     autoOptimizeSeo: true
   });
-
+  
   const handleOpenModal = () => {
     setFormData({
       title: '',
@@ -36,8 +144,8 @@ export default function QueueTracker({ state, refresh }: { state: AppState, refr
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.title.trim() || !formData.sourceUrl.trim() || !formData.targetUserId) {
-      setErrorMsg('Title, Source URL, and Target Channel are required.');
+    if (!formData.sourceUrl.trim() || !formData.targetUserId) {
+      setErrorMsg('Source URL and Target Channel are required.');
       return;
     }
 
@@ -68,6 +176,24 @@ export default function QueueTracker({ state, refresh }: { state: AppState, refr
       refresh();
     } finally {
       setOptimizing(null);
+    }
+  };
+
+  const handleRetry = async (id: string) => {
+    try {
+      await retryVideo(id);
+      refresh();
+    } catch (err: any) {
+      console.error("Failed to retry video:", err);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteVideo(id);
+      refresh();
+    } catch (err: any) {
+      console.error("Failed to delete video:", err);
     }
   };
 
@@ -106,19 +232,7 @@ export default function QueueTracker({ state, refresh }: { state: AppState, refr
                     <div className="text-xs text-slate-500 truncate mt-1">ID: {video.id}</div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-2">
-                      {video.status === 'queued' && <div className="w-2 h-2 rounded-full bg-slate-500" />}
-                      {video.status === 'downloading' && <Loader2 className="w-4 h-4 text-neon-blue animate-spin" />}
-                      {video.status === 'uploading' && <Loader2 className="w-4 h-4 text-neon-purple animate-spin" />}
-                      {video.status === 'completed' && <Check className="w-4 h-4 text-neon-green" />}
-                      {video.status === 'failed' && <AlertCircle className="w-4 h-4 text-neon-red" />}
-                      <span className="capitalize font-medium text-slate-300">{video.status}</span>
-                    </div>
-                    {['downloading', 'uploading'].includes(video.status) && (
-                      <div className="w-24 h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
-                        <div className={`h-full ${video.status === 'downloading' ? 'bg-neon-blue' : 'bg-neon-purple'}`} style={{ width: `${video.progress}%` }} />
-                      </div>
-                    )}
+                    <VideoPipelineProgress video={video} />
                   </td>
                   <td className="px-6 py-4">
                     {video.cpsPrediction ? (
@@ -149,10 +263,18 @@ export default function QueueTracker({ state, refresh }: { state: AppState, refr
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex gap-2">
-                      <button className="p-1.5 text-slate-500 hover:text-white rounded hover:bg-white/10 transition-colors" title="Retry">
+                      <button 
+                        onClick={() => handleRetry(video.id)}
+                        className="p-1.5 text-slate-500 hover:text-white rounded hover:bg-white/10 transition-colors" 
+                        title="Retry/Re-queue Video"
+                      >
                         <RefreshCw className="w-4 h-4" />
                       </button>
-                      <button className="p-1.5 text-slate-500 hover:text-neon-red rounded hover:bg-neon-red/10 transition-colors" title="Delete">
+                      <button 
+                        onClick={() => handleDelete(video.id)}
+                        className="p-1.5 text-slate-500 hover:text-neon-red rounded hover:bg-neon-red/10 transition-colors" 
+                        title="Delete Video"
+                      >
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
@@ -190,14 +312,16 @@ export default function QueueTracker({ state, refresh }: { state: AppState, refr
               )}
 
               <div className="space-y-1">
-                <label className="text-xs text-slate-400 uppercase font-semibold tracking-wider">Video Title</label>
+                <label className="text-xs text-slate-400 uppercase font-semibold tracking-wider flex justify-between">
+                  <span>Video Title (Optional)</span>
+                  <span className="text-[10px] text-neon-blue lowercase font-normal italic">Leave empty to auto-generate title & description with AI</span>
+                </label>
                 <input 
                   type="text" 
                   value={formData.title} 
                   onChange={e => setFormData({...formData, title: e.target.value})} 
-                  className="w-full bg-slate-800/50 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-neon-blue transition-colors text-white" 
-                  placeholder="e.g. My Amazing Short Video" 
-                  required
+                  className="w-full bg-slate-800/50 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-neon-blue transition-colors text-white placeholder-slate-500" 
+                  placeholder="e.g. My Amazing Short (Leave empty for Gemini AI SEO Title)" 
                 />
               </div>
 

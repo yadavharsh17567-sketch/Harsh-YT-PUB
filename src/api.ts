@@ -78,3 +78,17 @@ export async function addManualVideo(videoData: any): Promise<any> {
   return res.json();
 }
 
+export async function retryVideo(id: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/videos/${id}/retry`, {
+    method: 'POST'
+  });
+  return res.json();
+}
+
+export async function deleteVideo(id: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/videos/${id}`, {
+    method: 'DELETE'
+  });
+  return res.json();
+}
+
