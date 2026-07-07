@@ -13,8 +13,18 @@ import youtubedl from 'youtube-dl-exec';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let __filename = '';
+let __dirname = '';
+
+try {
+  __filename = fileURLToPath(import.meta.url);
+  __dirname = path.dirname(__filename);
+} catch (e) {
+  // In CJS, these are globals
+  __filename = (typeof __filename !== 'undefined') ? __filename : '';
+  __dirname = (typeof __dirname !== 'undefined') ? __dirname : process.cwd();
+}
+
 const execPromise = util.promisify(exec);
 const execFilePromise = util.promisify(execFile);
 
@@ -409,26 +419,53 @@ Respond ONLY in JSON format:
   }
 });
 
+// Helper to prepare cookies file
+function prepareCookies(settings: any, id: string) {
+  const cookiePath = path.resolve(process.cwd(), `cookies_${id}.txt`);
+  if (settings.youtubeCookies) {
+    const formattedCookies = settings.youtubeCookies
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\r/g, '\r');
+    fs.writeFileSync(cookiePath, formattedCookies, 'utf8');
+    return cookiePath;
+  }
+  return null;
+}
+
 // Helper to fetch original video metadata from YouTube URL using yt-dlp -j
-async function getOriginalVideoMetadata(url: string) {
+async function getOriginalVideoMetadata(url: string, settings?: any) {
+  let cookiePath = null;
+  const ytDlpPath = path.resolve(process.cwd(), 'node_modules/youtube-dl-exec/bin/yt-dlp');
+  
   try {
-    const cmd = `/usr/local/bin/yt-dlp -j --no-warnings --no-check-certificates --js-runtimes node "${url}"`;
-    const { stdout } = await execPromise(cmd);
+    const args = ['-j', '--no-warnings', '--no-check-certificates', '--js-runtimes', 'node'];
+    if (settings) {
+      cookiePath = prepareCookies(settings, `meta_${Date.now()}`);
+      if (cookiePath) {
+        args.push('--cookies', cookiePath);
+      }
+      if (settings.youtubePoToken || settings.youtubeVisitorData) {
+        const parts = [];
+        if (settings.youtubeVisitorData) parts.push(`visitor_data=${settings.youtubeVisitorData}`);
+        if (settings.youtubePoToken) parts.push(`po_token=web+${settings.youtubePoToken}`);
+        args.push('--extractor-args', `youtube:${parts.join(',')}`);
+      }
+    }
+    
+    const { stdout } = await execFilePromise(ytDlpPath, [...args, url]);
     const data = JSON.parse(stdout);
+    if (cookiePath && fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
+    
     return {
       title: data.title || '',
       description: data.description || '',
       tags: data.tags || []
     };
   } catch (err: any) {
+    if (cookiePath && fs.existsSync(cookiePath)) fs.unlinkSync(cookiePath);
     console.error("Failed to get video metadata via yt-dlp -j:", err.message);
-    const idMatch = url.match(/(?:v=|\/shorts\/|\/embed\/|\/v\/|youtu\.be\/|\/watch\?v=)([^#\&\?]+)/);
-    const videoId = idMatch ? idMatch[1] : 'Shorts_Video';
-    return {
-      title: `YouTube Video ${videoId}`,
-      description: 'Automatically imported via local pipeline.',
-      tags: []
-    };
+    throw err;
   }
 }
 
@@ -460,7 +497,7 @@ async function processVideo(video: any) {
     if (!isMockUrl) {
       addLog('info', `Fetching original video details via yt-dlp for URL: ${video.sourceUrl}`);
       try {
-        const metadata = await getOriginalVideoMetadata(video.sourceUrl);
+        const metadata = await getOriginalVideoMetadata(video.sourceUrl, db.settings);
         video.title = metadata.title || video.title;
         video.description = metadata.description || video.description;
         if (metadata.tags && metadata.tags.length > 0) {
@@ -480,7 +517,11 @@ async function processVideo(video: any) {
         }
         addLog('success', `Successfully fetched original metadata title: "${video.title}"`);
       } catch (metaErr: any) {
-        addLog('warn', `Failed to fetch original metadata: ${metaErr.message}`);
+        const idMatch = video.sourceUrl.match(/(?:v=|\/shorts\/|\/embed\/|\/v\/|youtu\.be\/|\/watch\?v=)([^#\&\?]+)/);
+        const videoId = idMatch ? idMatch[1] : 'Shorts_Video';
+        video.title = `YouTube Video ${videoId}`;
+        video.description = 'Automatically imported via local pipeline.';
+        addLog('warn', `Failed to fetch original metadata for ${video.sourceUrl}. Using fallback title: "${video.title}". Error: ${metaErr.message}`);
       }
     } else {
       // Is mock, generate a placeholder
@@ -525,9 +566,9 @@ Given the following original video title and description:
 Title: "${video.title}"
 Description: "${video.description}"
 
-Your goal is to generate a highly engaging, click-worthy, and SEO-optimized similar title and description specifically tailored for a YouTube Short.
-1. The newTitle should be a highly engaging, punchy, similar title of the video that is optimized for maximum YouTube search and viral click-through rates (CTR).
-2. The newDescription should be a comprehensive, keyword-dense description optimized for search algorithms, featuring relevant hashtags, compelling copy, and calls-to-action.
+Your goal is to generate a highly engaging, click-worthy, and SEO-optimized title and description specifically tailored for a YouTube Short.
+1. The newTitle MUST be highly engaging, punchy, and SIMILAR to the original concept but NOT identical. It should be optimized for maximum YouTube search and viral click-through rates (CTR).
+2. The newDescription should be a comprehensive, keyword-dense description optimized for search algorithms. It MUST feature multiple relevant hashtags (e.g. #Shorts #Viral #YouTube), compelling copy, and clear calls-to-action.
 3. Suggest 5-10 highly relevant high-traffic tags.
 4. Predict the click-through rate (CTR, out of 100) and provide a performance score (0-100).
 
@@ -538,7 +579,8 @@ Respond ONLY in JSON format:
   "cpsScore": 85,
   "predictedCtr": 8.5,
   "tagsSuggestions": ["tag1", "tag2"]
-}`;
+}
+If the provided title is generic (like "YouTube Video ID"), use your best judgment based on any keywords in the description or common high-performing Short patterns.`;
 
         const response = await ai.models.generateContent({
           model: 'gemini-2.0-flash',
@@ -691,7 +733,8 @@ Respond ONLY in JSON format:
 
       addLog('info', `Executing local yt-dlp binary for download: ${video.title}`);
       
-      const dlPromise = execFilePromise('/usr/local/bin/yt-dlp', dlArgsArr);
+      const ytDlpPath = path.resolve(process.cwd(), 'node_modules/youtube-dl-exec/bin/yt-dlp');
+      const dlPromise = execFilePromise(ytDlpPath, dlArgsArr);
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('Download timeout (60s exceeded)')), 60000)
       );
@@ -1035,9 +1078,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(__dirname, 'dist')));
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
     app.get('*', (req, res) => {
-      res.sendFile(path.join(__dirname, 'dist/index.html'));
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 

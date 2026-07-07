@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --platform=node --target=node20 --outfile=dist/server.cjs --bundle --format=cjs --external:express --external:vite",
+    "build": "vite build && esbuild server.ts --platform=node --target=node20 --outfile=dist/server.cjs --bundle --format=cjs --packages=external",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"

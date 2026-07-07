@@ -41,6 +41,7 @@ export default function SettingsLog({ state, refresh }: { state: AppState, refre
             <div className="space-y-1">
               <label className="text-xs text-slate-400 uppercase font-semibold tracking-wider">Gemini API Key</label>
               <input type="password" value={formData.geminiApiKey} onChange={e => setFormData({...formData, geminiApiKey: e.target.value})} className="w-full bg-slate-800/50 border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-neon-purple transition-colors font-mono" placeholder="AI Studio Secret..." />
+              <p className="text-[10px] text-slate-500 mt-1 italic">Required for "Auto-Optimize SEO" feature. Get your key from Google AI Studio.</p>
             </div>
             
             <div className="grid grid-cols-2 gap-4">
