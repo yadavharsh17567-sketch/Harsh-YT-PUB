@@ -100,7 +100,7 @@ export default function App() {
   if (isAuthenticated === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-900">
-        <Rocket className="w-12 h-12 text-neon-blue animate-spaceship" />
+        <Rocket className="w-12 h-12 text-cyan-400 animate-pulse" />
       </div>
     );
   }
@@ -333,4 +333,4 @@ export default function App() {
       </div>
     </div>
   );
-}
+                      }
