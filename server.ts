@@ -580,3 +580,6 @@ async function getOriginalVideoMetadata(url: string, settings?: any) {
 // Background processor
 async function processVideo(video: any) {
   let db = getDb()
+
+  throw new Error('processVideo function body missing due to truncated source file');
+}
