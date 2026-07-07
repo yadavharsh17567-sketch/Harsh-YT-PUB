@@ -412,7 +412,7 @@ Respond ONLY in JSON format:
 // Helper to fetch original video metadata from YouTube URL using yt-dlp -j
 async function getOriginalVideoMetadata(url: string) {
   try {
-    const cmd = `./yt-dlp -j --no-warnings --no-check-certificates "${url}"`;
+    const cmd = `/usr/local/bin/yt-dlp -j --no-warnings --no-check-certificates --js-runtimes node "${url}"`;
     const { stdout } = await execPromise(cmd);
     const data = JSON.parse(stdout);
     return {
@@ -512,14 +512,25 @@ async function processVideo(video: any) {
       }
 
       if (apiKey) {
-        const ai = new GoogleGenAI({ apiKey });
-        const prompt = `Act as an expert YouTube SEO optimizer. 
-Given this video title: "${video.title}"
-And this description: "${video.description}"
-Rewrite the title to be highly engaging and click-worthy for a YouTube Short.
-Rewrite the description to be optimized for search, adding strong keywords.
-Also predict the Click-Through Rate (CTR, out of 100) and provide a score.
-Suggest 5-10 tags.
+        const ai = new GoogleGenAI({ 
+          apiKey,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
+            }
+          }
+        });
+        const prompt = `Act as an expert YouTube SEO optimizer and viral growth strategist.
+Given the following original video title and description:
+Title: "${video.title}"
+Description: "${video.description}"
+
+Your goal is to generate a highly engaging, click-worthy, and SEO-optimized similar title and description specifically tailored for a YouTube Short.
+1. The newTitle should be a highly engaging, punchy, similar title of the video that is optimized for maximum YouTube search and viral click-through rates (CTR).
+2. The newDescription should be a comprehensive, keyword-dense description optimized for search algorithms, featuring relevant hashtags, compelling copy, and calls-to-action.
+3. Suggest 5-10 highly relevant high-traffic tags.
+4. Predict the click-through rate (CTR, out of 100) and provide a performance score.
+
 Respond ONLY in JSON format:
 {
   "newTitle": "...",
@@ -673,13 +684,14 @@ Respond ONLY in JSON format:
       }
       dlArgsArr.push('--no-check-certificates');
       dlArgsArr.push('--no-warnings');
+      dlArgsArr.push('--js-runtimes', 'node');
       dlArgsArr.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best');
       dlArgsArr.push('-o', outPath);
       dlArgsArr.push(video.sourceUrl);
 
       addLog('info', `Executing local yt-dlp binary for download: ${video.title}`);
       
-      const dlPromise = execFilePromise('./yt-dlp', dlArgsArr);
+      const dlPromise = execFilePromise('/usr/local/bin/yt-dlp', dlArgsArr);
       const timeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error('Download timeout (60s exceeded)')), 60000)
       );
