@@ -89,7 +89,7 @@ export default function Sidebar({ activeTab, setActiveTab, users }: SidebarProps
             <Plus className="w-4 h-4" /> Add Channel
           </button>
         </div>
-        <div className="mt-6 pt-6 border-t border-white/5">
+        <div className="mt-4 pt-4 border-t border-white/5">
           <button 
             onClick={handleLogout}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300 border border-transparent text-slate-400 hover:text-red-400 hover:bg-red-400/5 hover:border-red-400/20"
