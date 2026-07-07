@@ -35,34 +35,28 @@ const PORT = process.env.PORT || 7860;
 app.use(cors());
 app.use(express.json());
 
-const authMiddleware = (
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction
-) => {
+// Auth Middleware
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
   const token = req.headers['authorization'];
   const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
-
-  if (
-    req.path === '/login' ||
-    req.path === '/auth/status' ||
-    req.path === '/auth/callback'
-  ) {
+  
+  // Allow login and auth status check without token
+  if (req.path === '/api/login' || req.path === '/api/auth/status' || req.path === '/api/auth/callback') {
     return next();
   }
 
   if (token === `Bearer ${expectedToken}`) {
-    return next();
+    next();
+  } else {
+    res.status(401).json({ error: 'Unauthorized' });
   }
-
-  return res.status(401).json({ error: 'Unauthorized' });
 };
 
-// Apply auth middleware
-app.use("/", authMiddleware);
+// Apply auth middleware to all /api routes except login and status
+app.use('/api', authMiddleware);
 
 // Auth Routes
-app.post('/login', (req, res) => {
+app.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   if (username === process.env.APP_USERNAME && password === process.env.APP_PASSWORD) {
     const token = Buffer.from(`${username}:${password}`).toString('base64');
@@ -72,11 +66,11 @@ app.post('/login', (req, res) => {
   }
 });
 
-app.post('/logout', (req, res) => {
+app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/auth/status', (req, res) => {
+app.get('/api/auth/status', (req, res) => {
   const token = req.headers['authorization'];
   const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
   
@@ -587,4 +581,584 @@ async function processVideo(video: any) {
       let freshDb = getDb();
       let freshVideo = freshDb.videos.find(v => v.id === video.id);
       if (freshVideo) {
-        freshVideo.
+        freshVideo.title = video.title;
+        freshVideo.description = video.description;
+        freshVideo.tags = video.tags;
+        freshVideo.needsMetadataFetch = false;
+        saveDb(freshDb);
+      }
+      addLog('success', `Fetched real metadata: "${video.title}"`);
+    } catch (metaErr: any) {
+      addLog('error', `Failed to fetch metadata for ${video.sourceUrl}: ${metaErr.message}`);
+      // If we can't get metadata, we can't really process it well, but we'll try to continue if it's not a simulation
+      video.needsMetadataFetch = false;
+    }
+  }
+
+  // Refresh DB reference
+  db = getDb();
+  
+  // 1. Auto-optimize SEO if enabled and not already optimized
+  if (video.autoOptimizeSeo && !video.isRewritten) {
+    addLog('info', `Auto-optimizing SEO using AI for "${video.title}" before download and upload.`);
+    try {
+      const geminiApiKey = (db.settings.geminiApiKey || process.env.GEMINI_API_KEY || '').trim();
+      const openaiApiKey = (db.settings.openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
+
+      if (!geminiApiKey && !openaiApiKey) {
+        addLog('warn', `Auto-optimization skipped: No API keys configured in settings.`);
+        return;
+      }
+
+      const prompt = `Act as an expert YouTube SEO optimizer and viral growth strategist.
+Given the following original video title and description:
+Title: "${video.title}"
+Description: "${video.description}"
+
+Your goal is to generate a highly engaging, click-worthy, and SEO-optimized title and description specifically tailored for a YouTube Short.
+1. The newTitle MUST be highly engaging, punchy, and SIMILAR to the original concept but NOT identical. It should be optimized for maximum YouTube search and viral click-through rates (CTR).
+2. The newDescription should be a comprehensive, keyword-dense description optimized for search algorithms. It MUST feature multiple relevant hashtags (e.g. #Shorts #Viral #YouTube), compelling copy, and clear calls-to-action.
+3. Suggest 5-10 highly relevant high-traffic tags.
+4. Predict the click-through rate (CTR, out of 100) and provide a performance score (0-100).
+
+Respond ONLY in JSON format:
+{
+  "newTitle": "...",
+  "newDescription": "...",
+  "cpsScore": 85,
+  "predictedCtr": 8.5,
+  "tagsSuggestions": ["tag1", "tag2"]
+}
+If the provided title is generic (like "YouTube Video ID"), use your best judgment based on any keywords in the description or common high-performing Short patterns.`;
+
+      let result: any = null;
+      let lastError = "";
+
+      // Try Gemini first
+      if (geminiApiKey) {
+        if (!geminiApiKey.startsWith('AIzaSy')) {
+          addLog('warn', `Gemini API key found but does not start with expected prefix "AIzaSy". Found: ${geminiApiKey.substring(0, 4)}...`);
+        }
+        try {
+          const ai = new GoogleGenAI({ 
+            apiKey: geminiApiKey,
+            httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+          });
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.5-flash',
+            contents: prompt,
+            config: { responseMimeType: 'application/json' }
+          });
+          const resultText = response.text || "{}";
+          result = JSON.parse(resultText);
+          addLog('info', 'SEO optimization completed successfully using Gemini.');
+        } catch (geminiErr: any) {
+          lastError = `Gemini Error: ${geminiErr.message}`;
+          addLog('warn', `Gemini optimization failed: ${geminiErr.message}`);
+        }
+      }
+
+      // Try OpenAI fallback or primary
+      if (!result && openaiApiKey) {
+        if (!openaiApiKey.startsWith('sk-')) {
+          addLog('warn', `OpenAI API key found but does not start with expected prefix "sk-". Found: ${openaiApiKey.substring(0, 3)}...`);
+        }
+        try {
+          const openai = new OpenAI({ apiKey: openaiApiKey });
+          const completion = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: "You are a YouTube SEO expert." },
+              { role: "user", content: prompt }
+            ],
+            response_format: { type: "json_object" }
+          });
+          const resultText = completion.choices[0].message.content || "{}";
+          result = JSON.parse(resultText);
+          addLog('info', 'SEO optimization completed successfully using OpenAI GPT.');
+        } catch (openaiErr: any) {
+          lastError = lastError ? `${lastError} | OpenAI Error: ${openaiErr.message}` : `OpenAI Error: ${openaiErr.message}`;
+          addLog('error', `OpenAI optimization failed: ${openaiErr.message}`);
+        }
+      }
+
+      if (result) {
+        let freshDb = getDb();
+        let freshVideo = freshDb.videos.find(v => v.id === video.id);
+        if (freshVideo) {
+          freshVideo.title = result.newTitle || freshVideo.title;
+          freshVideo.description = result.newDescription || freshVideo.description;
+          freshVideo.cpsPrediction = {
+            score: result.cpsScore || 80,
+            ctr: result.predictedCtr || 8.0,
+            tagsSuggestions: result.tagsSuggestions || []
+          };
+          if (result.tagsSuggestions) {
+            freshVideo.tags = Array.from(new Set([...(freshVideo.tags || []), ...result.tagsSuggestions]));
+          }
+          freshVideo.isRewritten = true;
+          saveDb(freshDb);
+          
+          // Sync current function parameter scope
+          video.title = freshVideo.title;
+          video.description = freshVideo.description;
+          video.tags = freshVideo.tags;
+          video.isRewritten = true;
+          
+          addLog('success', `AI SEO optimized title: "${video.title}"`, { score: freshVideo.cpsPrediction.score });
+        }
+      } else {
+        addLog('warn', `Auto-optimization skipped: ${lastError || "No valid API keys found in settings or environment."}`);
+      }
+    } catch (seoErr: any) {
+      addLog('error', `Auto SEO optimization failed for "${video.title}": ${seoErr.message}`);
+    }
+  }
+
+  db = getDb();
+  const settings = db.settings;
+  const targetUser = db.users.find(u => u.id === video.targetUserId);
+  if (!targetUser) {
+    throw new Error(`Target YouTube channel not found for ID: ${video.targetUserId}`);
+  }
+
+  const isMockToken = !targetUser.accessToken || targetUser.accessToken.startsWith('mock_');
+  
+  if (isMockToken) {
+    addLog('warn', `Simulated Channel detected for "${targetUser.name}". Real upload is disabled for mock accounts.`);
+    // We'll mark it as failed or complete simulation if you want, but user wants real.
+    throw new Error('Real upload requires a connected YouTube account (not a mock account).');
+  }
+
+  const cookiePath = path.resolve(process.cwd(), `cookies_${video.id}.txt`);
+  const outPath = path.resolve(process.cwd(), `tmp_${video.id}.mp4`);
+
+  try {
+    // --- REAL PIPELINE PATHWAY ---
+    addLog('info', `Starting real download for video: "${video.title}" using local yt-dlp`);
+
+    let downloadSucceeded = true;
+
+    // Prepare cookies if available
+    if (settings.youtubeCookies) {
+      const formattedCookies = settings.youtubeCookies
+        .replace(/\\n/g, '\n')
+        .replace(/\\t/g, '\t')
+        .replace(/\\r/g, '\r');
+      fs.writeFileSync(cookiePath, formattedCookies, 'utf8');
+    }
+
+    // Update status to 'downloading'
+    let freshDb = getDb();
+    let freshVideo = freshDb.videos.find(v => v.id === video.id);
+    if (freshVideo) {
+      freshVideo.status = 'downloading';
+      freshVideo.progress = 15;
+      saveDb(freshDb);
+    }
+
+    // Execute real yt-dlp download
+    try {
+      const dlArgsArr: string[] = [];
+      if (settings.youtubeCookies) {
+        dlArgsArr.push('--cookies', cookiePath);
+      }
+      if (settings.youtubePoToken || settings.youtubeVisitorData) {
+        const parts = [];
+        if (settings.youtubeVisitorData) parts.push(`visitor_data=${settings.youtubeVisitorData}`);
+        if (settings.youtubePoToken) parts.push(`po_token=web+${settings.youtubePoToken}`);
+        dlArgsArr.push('--extractor-args', `youtube:${parts.join(',')}`);
+      }
+      dlArgsArr.push('--no-check-certificates');
+      dlArgsArr.push('--no-warnings');
+      dlArgsArr.push('--js-runtimes', 'node');
+      dlArgsArr.push('-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best');
+      dlArgsArr.push('-o', outPath);
+      dlArgsArr.push(video.sourceUrl);
+
+      addLog('info', `Executing local yt-dlp binary for download: ${video.title}`);
+      
+      const ytDlpPath = path.resolve(process.cwd(), 'node_modules/youtube-dl-exec/bin/yt-dlp');
+      const dlPromise = execFilePromise(ytDlpPath, dlArgsArr);
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Download timeout (300s exceeded)')), 300000)
+      );
+      await Promise.race([dlPromise, timeoutPromise]);
+
+      if (!fs.existsSync(outPath) || fs.statSync(outPath).size === 0) {
+        throw new Error('Downloaded file is empty or does not exist on disk.');
+      }
+      addLog('success', `Successfully downloaded "${video.title}" video file.`);
+    } catch (ytErr: any) {
+      downloadSucceeded = false;
+      const errorMsg = ytErr.message || String(ytErr);
+      addLog('error', `Download failed: ${errorMsg}`);
+      throw new Error(`Could not download video. YouTube might be blocking the request or the URL is invalid. Error: ${errorMsg}`);
+    }
+
+    // Update status to 'downloaded' (Processing)
+    freshDb = getDb();
+    freshVideo = freshDb.videos.find(v => v.id === video.id);
+    if (freshVideo) {
+      freshVideo.status = 'downloaded';
+      freshVideo.progress = 50;
+      saveDb(freshDb);
+    }
+
+    // Update status to 'uploading'
+    freshDb = getDb();
+    freshVideo = freshDb.videos.find(v => v.id === video.id);
+    if (freshVideo) {
+      freshVideo.status = 'uploading';
+      freshVideo.progress = 75;
+      saveDb(freshDb);
+    }
+
+    addLog('info', `Starting Real YouTube API upload to channel "${targetUser.name}"`);
+
+    // Real YouTube API upload
+    const oauth2Client = getOAuth2Client();
+
+    // Set up automatically listening to refreshed tokens
+    oauth2Client.on('tokens', (tokens) => {
+      if (tokens.access_token) {
+        const freshDb = getDb();
+        const u = freshDb.users.find(usr => usr.id === targetUser.id);
+        if (u) {
+          u.accessToken = tokens.access_token;
+          if (tokens.expiry_date) {
+            u.tokenExpiry = new Date(tokens.expiry_date).toISOString();
+          }
+          if (tokens.refresh_token) {
+            u.refreshToken = tokens.refresh_token;
+          }
+          saveDb(freshDb);
+          addLog('info', `Saved auto-refreshed OAuth token for user: ${targetUser.name}`);
+        }
+      }
+    });
+
+    oauth2Client.setCredentials({
+      access_token: targetUser.accessToken,
+      refresh_token: targetUser.refreshToken,
+      expiry_date: targetUser.tokenExpiry ? new Date(targetUser.tokenExpiry).getTime() : undefined
+    });
+
+    // Explicitly check and refresh OAuth token before media upload starts
+    const isExpired = !targetUser.tokenExpiry || new Date(targetUser.tokenExpiry).getTime() <= Date.now() + 5 * 60 * 1000;
+    if (isExpired && targetUser.refreshToken) {
+      addLog('info', `OAuth token is expired or near expiry for "${targetUser.name}". Refreshing before upload...`);
+      try {
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        if (credentials.access_token) {
+          targetUser.accessToken = credentials.access_token;
+          targetUser.tokenExpiry = credentials.expiry_date 
+            ? new Date(credentials.expiry_date).toISOString() 
+            : new Date(Date.now() + 3600 * 1000).toISOString();
+          if (credentials.refresh_token) {
+            targetUser.refreshToken = credentials.refresh_token;
+          }
+          
+          // Save refreshed token to DB
+          const freshDbForUser = getDb();
+          const u = freshDbForUser.users.find(usr => usr.id === targetUser.id);
+          if (u) {
+            u.accessToken = targetUser.accessToken;
+            u.tokenExpiry = targetUser.tokenExpiry;
+            if (credentials.refresh_token) {
+              u.refreshToken = credentials.refresh_token;
+            }
+            saveDb(freshDbForUser);
+          }
+          addLog('success', `OAuth token successfully refreshed for "${targetUser.name}"`);
+          
+          oauth2Client.setCredentials({
+            access_token: targetUser.accessToken,
+            refresh_token: targetUser.refreshToken,
+            expiry_date: credentials.expiry_date
+          });
+        }
+      } catch (refreshErr: any) {
+        let errMsg = refreshErr.message || refreshErr;
+        if (errMsg.toLowerCase().includes('invalid_grant')) {
+          errMsg = 'Invalid Grant (Refresh token revoked or expired). Please disconnect and reconnect your YouTube channel.';
+        }
+        addLog('error', `Failed to refresh OAuth token for "${targetUser.name}": ${errMsg}`);
+        throw new Error(`Authentication refresh failed: ${errMsg}. Please disconnect and reconnect your YouTube channel.`);
+      }
+    }
+
+    // Final security check
+    if (!fs.existsSync(outPath) || fs.statSync(outPath).size < 1024) {
+      throw new Error('Video file on disk is invalid or too small. Aborting upload to prevent YouTube corruption error.');
+    }
+
+    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+
+    let resUpload;
+    try {
+      resUpload = await youtube.videos.insert({
+        part: ['snippet', 'status'],
+        requestBody: {
+          snippet: {
+            title: video.title.slice(0, 100),
+            description: video.description || '',
+            tags: video.tags || [],
+            categoryId: '22', // People & Blogs
+          },
+          status: {
+            privacyStatus: video.privacyStatus || 'private',
+            selfDeclaredMadeForKids: false,
+          },
+        },
+        media: {
+          body: fs.createReadStream(outPath),
+        },
+      }, {
+        timeout: 600000, // 10 minutes timeout for upload
+        retry: true,
+        retryConfig: {
+          retry: 3,
+          retryDelay: 1000,
+          statusCodesToRetry: [[100, 199], [429, 429], [500, 599]],
+          httpMethodsToRetry: ['POST'],
+          onRetryAttempt: (err) => {
+            addLog('warn', `Upload retry attempt due to error: ${err.message}`);
+          }
+        }
+      });
+    } catch (uploadErr: any) {
+      const isAuthError = uploadErr.code === 401 || 
+                          (uploadErr.message && (
+                            uploadErr.message.toLowerCase().includes('invalid credentials') || 
+                            uploadErr.message.toLowerCase().includes('auth') || 
+                            uploadErr.message.toLowerCase().includes('token')
+                          ));
+      if (isAuthError && targetUser.refreshToken) {
+        addLog('warn', `First upload attempt failed due to authorization. Force-refreshing token and retrying upload...`);
+        try {
+          const { credentials } = await oauth2Client.refreshAccessToken();
+          if (credentials.access_token) {
+            targetUser.accessToken = credentials.access_token;
+            targetUser.tokenExpiry = credentials.expiry_date 
+              ? new Date(credentials.expiry_date).toISOString() 
+              : new Date(Date.now() + 3600 * 1000).toISOString();
+            if (credentials.refresh_token) {
+              targetUser.refreshToken = credentials.refresh_token;
+            }
+            
+            // Save refreshed token to DB
+            const freshDbForUser = getDb();
+            const u = freshDbForUser.users.find(usr => usr.id === targetUser.id);
+            if (u) {
+              u.accessToken = targetUser.accessToken;
+              u.tokenExpiry = targetUser.tokenExpiry;
+              if (credentials.refresh_token) {
+                u.refreshToken = credentials.refresh_token;
+              }
+              saveDb(freshDbForUser);
+            }
+            
+            oauth2Client.setCredentials({
+              access_token: targetUser.accessToken,
+              refresh_token: targetUser.refreshToken,
+              expiry_date: credentials.expiry_date
+            });
+            
+            // Retry upload with fresh read stream
+            resUpload = await youtube.videos.insert({
+              part: ['snippet', 'status'],
+              requestBody: {
+                snippet: {
+                  title: video.title.slice(0, 100),
+                  description: video.description || '',
+                  tags: video.tags || [],
+                  categoryId: '22',
+                },
+                status: {
+                  privacyStatus: video.privacyStatus || 'private',
+                  selfDeclaredMadeForKids: false,
+                },
+              },
+              media: {
+                body: fs.createReadStream(outPath),
+              },
+            }, {
+              timeout: 600000, // 10 minutes
+              retry: true
+            });
+          } else {
+            throw uploadErr;
+          }
+        } catch (retryErr: any) {
+          let retryMsg = retryErr.message || retryErr;
+          if (retryMsg.toLowerCase().includes('invalid_grant')) {
+            retryMsg = 'Invalid Grant (Refresh token revoked or expired). Please disconnect and reconnect your YouTube channel.';
+          }
+          addLog('error', `Retry upload failed: ${retryMsg}`);
+          throw new Error(`Upload failed after token refresh retry: ${retryMsg}`);
+        }
+      } else {
+        addLog('error', `Real YouTube Upload failed: ${uploadErr.message || uploadErr}`);
+        throw uploadErr;
+      }
+    }
+
+    const uploadedVideoId = resUpload.data.id;
+    if (downloadSucceeded) {
+      addLog('success', `Real Upload Successful! Published "${video.title}" on ${targetUser.name}. YouTube Video ID: ${uploadedVideoId}`, { youtubeId: uploadedVideoId });
+    } else {
+      addLog('success', `[Fallback Mode] Upload Successful with high-fidelity placeholder! Published "${video.title}" on ${targetUser.name}. YouTube Video ID: ${uploadedVideoId}. Update your cookies or PO tokens to restore real video downloads.`, { youtubeId: uploadedVideoId });
+    }
+
+    // Mark as completed
+    freshDb = getDb();
+    freshVideo = freshDb.videos.find(v => v.id === video.id);
+    if(freshVideo) {
+       freshVideo.status = 'completed';
+       freshVideo.progress = 100;
+       freshVideo.completedAt = new Date().toISOString();
+       if (!freshDb.processedVideoIds.includes(video.id)) {
+         freshDb.processedVideoIds.push(video.id);
+       }
+       saveDb(freshDb);
+    }
+    addLog('success', `Completed pipeline for ${video.title}`);
+
+  } catch (err: any) {
+    addLog('error', `Processing failed for ${video.title}: ${err.message}`);
+    let freshDb = getDb();
+    let freshVideo = freshDb.videos.find(v => v.id === video.id);
+    if(freshVideo) {
+       freshVideo.status = 'failed';
+       freshVideo.error = err.message;
+       saveDb(freshDb);
+    }
+  } finally {
+    // cleanup temp files securely
+    if (fs.existsSync(outPath)) {
+      try { fs.unlinkSync(outPath); } catch {}
+    }
+    if (fs.existsSync(cookiePath)) {
+      try { fs.unlinkSync(cookiePath); } catch {}
+    }
+  }
+}
+
+// Background scheduler rule runner
+setInterval(async () => {
+  try {
+    const db = getDb();
+    let changed = false;
+    const now = new Date();
+
+    for (const rule of db.scheduleRules) {
+      if (!rule.enabled) continue;
+
+      const lastChecked = rule.lastCheckedAt ? new Date(rule.lastCheckedAt) : new Date(0);
+      const diffMs = now.getTime() - lastChecked.getTime();
+      const diffMins = diffMs / (1000 * 60);
+
+      // Run immediately if never checked, or if interval minutes elapsed
+      if (!rule.lastCheckedAt || diffMins >= rule.intervalMinutes) {
+        rule.lastCheckedAt = now.toISOString();
+        changed = true;
+
+        addLog('info', `Interval reached for rule "${rule.name}". Checking for new videos...`);
+        
+        try {
+          const sourceUrl = await fetchLatestVideoUrl(rule.sourceChannelUrl, db.settings);
+          if (sourceUrl) {
+            const videoId = sourceUrl.split('v=')[1] || Math.random().toString(36).substring(2, 7);
+            const titlePrefix = rule.titlePrefix ? rule.titlePrefix + ' ' : '';
+            const titleSuffix = rule.titleSuffix ? ' ' + rule.titleSuffix : '';
+            const title = `${titlePrefix}Auto Fetched Video ${videoId}${titleSuffix}`.trim();
+            const description = `${rule.descriptionTemplate || 'Auto fetched description.'}\n\nProcessed by Nexus Scheduler Rule: ${rule.name}`;
+
+            if (!isVideoAlreadyProcessed(sourceUrl, title)) {
+              const newVideo = {
+                id: 'auto_' + Date.now() + '_' + videoId,
+                targetUserId: rule.targetUserId,
+                sourceUrl: sourceUrl,
+                title: title,
+                description: description,
+                thumbnailUrl: 'https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=300',
+                status: 'queued' as const,
+                progress: 0,
+                retryCount: 0,
+                maxRetries: db.settings.maxRetries || 3,
+                queuedAt: new Date().toISOString(),
+                privacyStatus: rule.privacyStatus || 'private',
+                tags: rule.tags || [],
+                scheduleRuleId: rule.id,
+                isRewritten: false,
+                autoOptimizeSeo: rule.autoOptimizeSeo || false,
+                needsMetadataFetch: true
+              };
+
+              db.videos.push(newVideo);
+              addLog('success', `Scheduler rule "${rule.name}" found a NEW video: ${sourceUrl}`, { videoTitle: title });
+            } else {
+              addLog('info', `No new videos found for rule "${rule.name}" since last check.`);
+            }
+          } else {
+            addLog('warn', `Scheduler rule "${rule.name}" could not find any videos at ${rule.sourceChannelUrl}`);
+          }
+        } catch (fetchErr: any) {
+          addLog('error', `Rule "${rule.name}" auto-fetch failed: ${fetchErr.message}`);
+        }
+      }
+    }
+
+    if (changed) {
+      saveDb(db);
+    }
+  } catch (err: any) {
+    console.error('Error running scheduler:', err);
+  }
+}, 12000); // Check rules every 12 seconds
+
+let isProcessing = false;
+setInterval(async () => {
+  if (isProcessing) return;
+  isProcessing = true;
+  try {
+    const db = getDb();
+    const queuedVideos = db.videos.filter(v => v.status === 'queued');
+    // Sort ascending by queuedAt (FIFO: oldest first)
+    queuedVideos.sort((a, b) => new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime());
+    const queued = queuedVideos[0];
+    if (queued) {
+      await processVideo(queued);
+    }
+  } finally {
+    isProcessing = false;
+  }
+}, 5000);
+
+
+// Vite integration
+let vite: any;
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa'
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(Number(PORT), '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
+    addLog('info', 'System initialized and server started.');
+  });
+}
+
+startServer();
