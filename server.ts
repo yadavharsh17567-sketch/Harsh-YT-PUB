@@ -35,52 +35,6 @@ const PORT = process.env.PORT || 7860;
 app.use(cors());
 app.use(express.json());
 
-// Auth Middleware
-const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  const token = req.headers['authorization'];
-  const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
-  
-  // Allow login and auth status check without token
-  if (req.path === '/api/login' || req.path === '/api/auth/status' || req.path === '/api/auth/callback') {
-    return next();
-  }
-
-  if (token === `Bearer ${expectedToken}`) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Unauthorized' });
-  }
-};
-
-// Apply auth middleware to all /api routes except login and status
-app.use('/api', authMiddleware);
-
-// Auth Routes
-app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
-  if (username === process.env.APP_USERNAME && password === process.env.APP_PASSWORD) {
-    const token = Buffer.from(`${username}:${password}`).toString('base64');
-    res.json({ token });
-  } else {
-    res.status(401).json({ error: 'Invalid credentials' });
-  }
-});
-
-app.post('/api/logout', (req, res) => {
-  res.json({ success: true });
-});
-
-app.get('/api/auth/status', (req, res) => {
-  const token = req.headers['authorization'];
-  const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
-  
-  if (token === `Bearer ${expectedToken}`) {
-    res.json({ isAuthenticated: true });
-  } else {
-    res.json({ isAuthenticated: false });
-  }
-});
-
 // YouTube OAuth Setup
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const REDIRECT_URI = `${APP_URL}/api/auth/callback`;
@@ -1155,7 +1109,7 @@ async function startServer() {
     });
   }
 
-  app.listen(Number(PORT), '0.0.0.0', () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
     addLog('info', 'System initialized and server started.');
   });
