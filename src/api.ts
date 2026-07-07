@@ -32,6 +32,7 @@ export async function checkAuthStatus(): Promise<{ isAuthenticated: boolean }> {
   const res = await fetch(`${API_BASE}/auth/status`, {
     headers: getHeaders()
   });
+  if (!res.ok) return { isAuthenticated: false };
   return res.json();
 }
 
@@ -138,4 +139,3 @@ export async function deleteVideo(id: string): Promise<any> {
   });
   return res.json();
 }
-
