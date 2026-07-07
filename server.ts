@@ -35,38 +35,51 @@ const PORT = process.env.PORT || 7860;
 app.use(cors());
 app.use(express.json());
 
-// ===== Simple App Authentication =====
-const APP_USERNAME = process.env.APP_USERNAME || "";
-const APP_PASSWORD = process.env.APP_PASSWORD || "";
-
-function requireAppAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const user = req.headers["x-app-username"];
-  const pass = req.headers["x-app-password"];
-
-  if (user === APP_USERNAME && pass === APP_PASSWORD) {
+// Auth Middleware
+const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const token = req.headers['authorization'];
+  const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
+  
+  // Allow login and auth status check without token
+  if (req.path === '/api/login' || req.path === '/api/auth/status' || req.path === '/api/auth/callback') {
     return next();
   }
-  return res.status(401).json({ error: "Authentication required" });
-}
 
-app.post("/api/login", (req, res) => {
-  const { username, password } = req.body;
-  if (username === APP_USERNAME && password === APP_PASSWORD) {
-    return res.json({ success: true });
+  if (token === `Bearer ${expectedToken}`) {
+    next();
+  } else {
+    res.status(401).json({ error: 'Unauthorized' });
   }
-  return res.status(401).json({ success: false, error: "Invalid credentials" });
+};
+
+// Apply auth middleware to all /api routes except login and status
+app.use('/api', authMiddleware);
+
+// Auth Routes
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  if (username === process.env.APP_USERNAME && password === process.env.APP_PASSWORD) {
+    const token = Buffer.from(`${username}:${password}`).toString('base64');
+    res.json({ token });
+  } else {
+    res.status(401).json({ error: 'Invalid credentials' });
+  }
 });
 
-app.get("/api/auth/status", (_req, res) => {
-  res.json({ configured: !!APP_USERNAME && !!APP_PASSWORD });
-});
-
-app.post("/api/logout", (_req, res) => {
+app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
-// ===== End Authentication =====
 
-
+app.get('/api/auth/status', (req, res) => {
+  const token = req.headers['authorization'];
+  const expectedToken = Buffer.from(`${process.env.APP_USERNAME}:${process.env.APP_PASSWORD}`).toString('base64');
+  
+  if (token === `Bearer ${expectedToken}`) {
+    res.json({ isAuthenticated: true });
+  } else {
+    res.json({ isAuthenticated: false });
+  }
+});
 
 // YouTube OAuth Setup
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
@@ -1142,7 +1155,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(Number(PORT), '0.0.0.0', () => {
     console.log(`Server is running on port ${PORT}`);
     addLog('info', 'System initialized and server started.');
   });
